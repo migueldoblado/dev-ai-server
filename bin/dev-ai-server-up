@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev-ai-server-up — create, bootstrap, and connect the dev server.
-# Reads GPG + GitHub keys from $PERSONAL_SECRETS, injects them over SSH,
+# Reads keys from the personal-secrets pass store, injects them over SSH,
 # clones the keys repo, and applies dotfiles — all automatic.
 
 set -euo pipefail
@@ -20,9 +20,12 @@ if [ ! -f "$SSH_KEY" ]; then
   echo "Missing: $SSH_KEY — generate with: ssh-keygen -t ed25519 -f $SSH_KEY" >&2
   exit 1
 fi
-if [ ! -f "$PERSONAL_SECRETS/ssh/github_personal" ]; then
-  echo "Missing: $PERSONAL_SECRETS/ssh/github_personal" >&2
-  echo "Missing bootstrap keys — see README prerequisites." >&2
+if [ ! -f "$PERSONAL_SECRETS/.gpg-id" ]; then
+  echo "Pass store not initialized at $PERSONAL_SECRETS — see personal-secrets README." >&2
+  exit 1
+fi
+if ! PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show ssh/github_personal >/dev/null 2>&1; then
+  echo "Missing pass entry ssh/github_personal — see personal-secrets README." >&2
   exit 1
 fi
 if [ -z "$KEYS_REPO" ]; then
@@ -51,7 +54,6 @@ done
 
 # ── ssh helpers ────────────────────────────────────────────
 ssh_key()  { ssh  -i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$@"; }
-scp_key()  { scp  -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$@"; }
 
 # ── wait for ssh + cloud-init ──────────────────────────────
 echo "Waiting for SSH..."
@@ -59,10 +61,10 @@ ssh-keygen -R "$IP" 2>/dev/null || true
 while ! ssh_key root@"$IP" echo ok 2>/dev/null; do sleep 5; done
 
 # ── inject bootstrap secrets ───────────────────────────────
-echo "Bootstrapping secrets..."
+echo "Injecting bootstrap keys..."
 ssh_key root@"$IP" mkdir -p .ssh .gnupg
-scp_key "$PERSONAL_SECRETS/ssh/github_personal" root@"$IP":.ssh/
-scp_key "$PERSONAL_SECRETS/gpg/private.key"   root@"$IP":/tmp/private.key
+PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show ssh/github_personal | ssh_key root@"$IP" 'cat > ~/.ssh/github_personal'
+PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show gpg/private.key   | ssh_key root@"$IP" 'cat > /tmp/private.key'
 
 ssh_key root@"$IP" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
 set -e
