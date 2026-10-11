@@ -15,12 +15,12 @@ packages:
 runcmd:
   # Ubuntu image forces a root password change on first SSH — reset expiry
   - chage -d -1 root
-  # rtk — LLM context filter for shell output
-  - curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+  # rtk — LLM context filter (needs explicit HOME, runcmd has none)
+  - export HOME=/root; curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
   # chezmoi — dotfiles manager
   - curl -fsSL https://git.io/chezmoi | sh -s -- -b /usr/local/bin
-  # herdr — agent multiplexer
-  - curl -fsSL https://herdr.dev/install.sh | sh
+  # herdr — agent multiplexer (needs explicit HOME)
+  - export HOME=/root; curl -fsSL https://herdr.dev/install.sh | sh
   # pi — coding agent
   - npm install -g @earendil-works/pi-coding-agent
   # zsh as default shell
