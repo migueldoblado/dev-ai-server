@@ -78,15 +78,13 @@ ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 # Import server GPG key
 gpg --batch --import /tmp/private.key
 rm /tmp/private.key
-# Cache passphrase in gpg-agent (so pass works non-interactively)
-PASSPHRASE=$(cat /tmp/passphrase); rm /tmp/passphrase
-if [ -n "$PASSPHRASE" ]; then
-  echo 'allow-preset-passphrase' >> ~/.gnupg/gpg-agent.conf
-  gpgconf --reload gpg-agent
-  KEYGRIP=$(gpg --with-keygrip --list-secret-keys 2>/dev/null | awk '/ssb/{s=1} /Keygrip/ && s {print $3; exit}')
-  PRESET=$(command -v gpg-preset-passphrase || echo /usr/lib/gnupg/gpg-preset-passphrase)
-  "$PRESET" --preset --passphrase "$PASSPHRASE" "$KEYGRIP"
-fi
+# Enable loopback pinentry + store passphrase for non-interactive gpg
+echo 'allow-loopback-pinentry' >> ~/.gnupg/gpg-agent.conf
+gpgconf --reload gpg-agent
+cat /tmp/passphrase > /root/.passphrase
+chmod 600 /root/.passphrase
+rm /tmp/passphrase
+export PASSWORD_STORE_GPG_OPTS="--pinentry-mode loopback --passphrase $(cat /root/.passphrase)"
 # Clone server keys repo
 git clone "$KEYS_REPO" ~/.password-store
 # Apply dotfiles (templates use {{ pass }} to pull API keys)
