@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev-ai-server-up — create, bootstrap, and connect the dev server.
-# Injects the server GPG key (from the default pass store) over SSH,
+# Injects GPG + GitHub keys from the default pass store over SSH,
 # then the server clones its keys repo and applies dotfiles.
 
 set -euo pipefail
@@ -11,7 +11,6 @@ IMAGE="${IMAGE:-ubuntu-24.04}"
 NAME="${NAME:-dev-ai}"
 SSH_KEY="$HOME/.ssh/hetzner_dev"
 KEYS_REPO="${KEYS_REPO:-}"
-DOTFILES_REPO="migueldoblado/dev-ai-server-dotfiles"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── preflight ──────────────────────────────────────────────
@@ -21,6 +20,10 @@ if [ ! -f "$SSH_KEY" ]; then
 fi
 if ! pass show gpg/private.key >/dev/null 2>&1; then
   echo "Missing pass entry gpg/private.key in default store." >&2
+  exit 1
+fi
+if ! pass show ssh/github_personal >/dev/null 2>&1; then
+  echo "Missing pass entry ssh/github_personal in default store." >&2
   exit 1
 fi
 if [ -z "$KEYS_REPO" ]; then
@@ -55,27 +58,27 @@ echo "Waiting for SSH..."
 ssh-keygen -R "$IP" 2>/dev/null || true
 while ! ssh_key root@"$IP" echo ok 2>/dev/null; do sleep 5; done
 
-# ── inject server GPG key ──────────────────────────────────
-echo "Injecting server GPG key..."
-pass show gpg/private.key | ssh_key root@"$IP" 'cat > /tmp/private.key'
+# ── inject bootstrap keys ──────────────────────────────────
+echo "Injecting bootstrap keys..."
+ssh_key root@"$IP" mkdir -p .ssh
+pass show gpg/private.key    | ssh_key root@"$IP" 'cat > /tmp/private.key'
+pass show ssh/github_personal | ssh_key root@"$IP" 'cat > ~/.ssh/github_personal'
 
 ssh_key root@"$IP" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
 set -e
-# Import GPG key (unlocks the keys repo)
-gpg --batch --import /tmp/private.key
-rm /tmp/private.key
-# Clone server keys repo
-pass git clone "$KEYS_REPO"
 # Configure GitHub SSH access
-mkdir -p ~/.ssh
-pass show ssh/github_personal > ~/.ssh/github_personal
 chmod 600 ~/.ssh/github_personal
 cat > ~/.ssh/config <<'EOF'
 Host github.com
   IdentityFile ~/.ssh/github_personal
 EOF
 chmod 600 ~/.ssh/config
-# Apply dotfiles
+# Import server GPG key
+gpg --batch --import /tmp/private.key
+rm /tmp/private.key
+# Clone server keys repo (now that SSH works)
+pass git clone "$KEYS_REPO"
+# Apply dotfiles (templates use {{ pass }} to pull API keys)
 chezmoi init --apply migueldoblado/dev-ai-server-dotfiles
 echo "Bootstrap complete."
 BOOTSTRAP
