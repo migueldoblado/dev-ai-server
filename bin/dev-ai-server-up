@@ -88,7 +88,7 @@ if [ -n "$PASSPHRASE" ]; then
   "$PRESET" --preset --passphrase "$PASSPHRASE" "$KEYGRIP"
 fi
 # Clone server keys repo
-pass git clone "$KEYS_REPO"
+git clone "$KEYS_REPO" ~/.password-store
 # Apply dotfiles (templates use {{ pass }} to pull API keys)
 chezmoi init --apply migueldoblado/dev-ai-server-dotfiles
 echo "Bootstrap complete."
