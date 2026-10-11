@@ -51,7 +51,7 @@ bin/dev-ai-server-down
 |----------|---------|-------------|
 | `SERVER_TYPE` | `cx23` | Hetzner server type |
 | `LOCATION` | `fsn1` | Hetzner location (fsn1, nbg1, hel1) |
-| `IMAGE` | `ubuntu-24.04` | OS image |
+| `IMAGE` | `ubuntu-26.04` | OS image |
 | `NAME` | `dev-ai` | Server name |
 | `KEYS_REPO` | *(required)* | Git URL of the GPG-encrypted secrets repo |
 | `PERSONAL_SECRETS` | `~/.config/personal-secrets` | Path to local pass store |

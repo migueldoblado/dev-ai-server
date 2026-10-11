@@ -7,7 +7,7 @@ set -euo pipefail
 
 SERVER_TYPE="${SERVER_TYPE:-cx23}"
 LOCATION="${LOCATION:-fsn1}"
-IMAGE="${IMAGE:-ubuntu-24.04}"
+IMAGE="${IMAGE:-ubuntu-26.04}"
 NAME="${NAME:-dev-ai}"
 SSH_KEY="$HOME/.ssh/hetzner_dev"
 KEYS_REPO="${KEYS_REPO:-}"
