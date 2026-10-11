@@ -1,7 +1,7 @@
 #!/bin/bash
 # dev-ai-server-up — create, bootstrap, and connect the dev server.
-# Reads keys from the personal-secrets pass store, injects them over SSH,
-# clones the keys repo, and applies dotfiles — all automatic.
+# Injects the server GPG key (from the default pass store) over SSH,
+# then the server clones its keys repo and applies dotfiles.
 
 set -euo pipefail
 
@@ -9,7 +9,6 @@ SERVER_TYPE="${SERVER_TYPE:-cx23}"
 LOCATION="${LOCATION:-fsn1}"
 IMAGE="${IMAGE:-ubuntu-24.04}"
 NAME="${NAME:-dev-ai}"
-PERSONAL_SECRETS="${PERSONAL_SECRETS:-$HOME/.config/personal-secrets}"
 SSH_KEY="$HOME/.ssh/hetzner_dev"
 KEYS_REPO="${KEYS_REPO:-}"
 DOTFILES_REPO="migueldoblado/dev-ai-server-dotfiles"
@@ -20,16 +19,12 @@ if [ ! -f "$SSH_KEY" ]; then
   echo "Missing: $SSH_KEY — generate with: ssh-keygen -t ed25519 -f $SSH_KEY" >&2
   exit 1
 fi
-if [ ! -f "$PERSONAL_SECRETS/.gpg-id" ]; then
-  echo "Pass store not initialized at $PERSONAL_SECRETS — see personal-secrets README." >&2
-  exit 1
-fi
-if ! PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show ssh/github_personal >/dev/null 2>&1; then
-  echo "Missing pass entry ssh/github_personal — see personal-secrets README." >&2
+if ! pass show gpg/private.key >/dev/null 2>&1; then
+  echo "Missing pass entry gpg/private.key in default store." >&2
   exit 1
 fi
 if [ -z "$KEYS_REPO" ]; then
-  echo "KEYS_REPO not set — needs the git URL of your encrypted secrets repo." >&2
+  echo "KEYS_REPO not set — needs the git URL of the server's encrypted secrets repo." >&2
   exit 1
 fi
 
@@ -60,26 +55,27 @@ echo "Waiting for SSH..."
 ssh-keygen -R "$IP" 2>/dev/null || true
 while ! ssh_key root@"$IP" echo ok 2>/dev/null; do sleep 5; done
 
-# ── inject bootstrap secrets ───────────────────────────────
-echo "Injecting bootstrap keys..."
-ssh_key root@"$IP" mkdir -p .ssh .gnupg
-PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show ssh/github_personal | ssh_key root@"$IP" 'cat > ~/.ssh/github_personal'
-PASSWORD_STORE_DIR="$PERSONAL_SECRETS" pass show gpg/private.key   | ssh_key root@"$IP" 'cat > /tmp/private.key'
+# ── inject server GPG key ──────────────────────────────────
+echo "Injecting server GPG key..."
+pass show gpg/private.key | ssh_key root@"$IP" 'cat > /tmp/private.key'
 
 ssh_key root@"$IP" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
 set -e
-# GitHub SSH config
+# Import GPG key (unlocks the keys repo)
+gpg --batch --import /tmp/private.key
+rm /tmp/private.key
+# Clone server keys repo
+pass git clone "$KEYS_REPO"
+# Configure GitHub SSH access
+mkdir -p ~/.ssh
+pass show ssh/github_personal > ~/.ssh/github_personal
 chmod 600 ~/.ssh/github_personal
 cat > ~/.ssh/config <<'EOF'
 Host github.com
   IdentityFile ~/.ssh/github_personal
 EOF
 chmod 600 ~/.ssh/config
-# GPG key for pass
-gpg --batch --import /tmp/private.key
-rm /tmp/private.key
-# Clone keys repo and apply dotfiles
-pass git clone "$KEYS_REPO"
+# Apply dotfiles
 chezmoi init --apply migueldoblado/dev-ai-server-dotfiles
 echo "Bootstrap complete."
 BOOTSTRAP
