@@ -1,0 +1,33 @@
+#cloud-config
+
+packages:
+  - pass
+  - gnupg
+  - git
+  - curl
+  - zsh
+  - docker.io
+  - nodejs
+  - npm
+  - build-essential
+  - jq
+
+runcmd:
+  # rtk — LLM context filter for shell output
+  - curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+  # chezmoi — dotfiles manager
+  - curl -fsSL https://git.io/chezmoi | sh -s -- -b /usr/local/bin
+  # herdr — agent multiplexer
+  - curl -fsSL https://herdr.dev/install.sh | sh
+  # pi — coding agent
+  - npm install -g @earendil-works/pi-coding-agent
+  # zsh as default shell
+  - command -v zsh >> /etc/shells 2>/dev/null || true; chsh -s /usr/bin/zsh root
+
+users:
+  - name: root
+    shell: /usr/bin/zsh
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBVA7AVX0xYKkja/CXPAEWtzukbEilaW4JeM04EzBki3 hetzner-dev
+
+final_message: "Boot complete. SSH in for manual setup — see dev-ai-server README."

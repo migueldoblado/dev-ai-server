@@ -1,0 +1,30 @@
+#!/bin/bash
+# dev-ai-server-up — create and boot the dev server on Hetzner Cloud.
+# Override defaults: SERVER_TYPE=cx33 LOCATION=nbg1 bin/dev-ai-server-up
+
+set -euo pipefail
+
+SERVER_TYPE="${SERVER_TYPE:-cx23}"
+LOCATION="${LOCATION:-fsn1}"
+IMAGE="${IMAGE:-ubuntu-24.04}"
+NAME="${NAME:-dev-ai}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "Creating server: $NAME ($SERVER_TYPE, $LOCATION, $IMAGE)"
+
+hcloud server create \
+  --name "$NAME" \
+  --type "$SERVER_TYPE" \
+  --location "$LOCATION" \
+  --image "$IMAGE" \
+  --user-data-from-file "$SCRIPT_DIR/../cloud-config.yaml"
+
+echo "Waiting for IP..."
+while true; do
+  IP=$(hcloud server describe "$NAME" -o json 2>/dev/null | jq -r '.public_net.ipv4.ip // empty')
+  if [ -n "$IP" ]; then
+    echo "Ready: ssh root@$IP"
+    break
+  fi
+  sleep 5
+done

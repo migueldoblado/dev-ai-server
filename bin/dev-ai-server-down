@@ -1,0 +1,9 @@
+#!/bin/bash
+# dev-ai-server-down — delete the dev server. Stops hourly billing.
+# Override name: NAME=other bin/dev-ai-server-down
+
+set -euo pipefail
+
+NAME="${NAME:-dev-ai}"
+
+hcloud server delete "$NAME" && echo "Deleted $NAME"
