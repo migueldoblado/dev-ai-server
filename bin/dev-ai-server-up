@@ -84,7 +84,8 @@ if [ -n "$PASSPHRASE" ]; then
   echo 'allow-preset-passphrase' >> ~/.gnupg/gpg-agent.conf
   gpgconf --reload gpg-agent
   KEYGRIP=$(gpg --with-keygrip --list-secret-keys 2>/dev/null | awk '/ssb/{s=1} /Keygrip/ && s {print $3; exit}')
-  gpg-preset-passphrase --preset --passphrase "$PASSPHRASE" "$KEYGRIP"
+  PRESET=$(command -v gpg-preset-passphrase || echo /usr/lib/gnupg/gpg-preset-passphrase)
+  "$PRESET" --preset --passphrase "$PASSPHRASE" "$KEYGRIP"
 fi
 # Clone server keys repo
 pass git clone "$KEYS_REPO"
