@@ -7,14 +7,15 @@ packages:
   - curl
   - zsh
   - docker.io
-  - nodejs
-  - npm
   - build-essential
   - jq
 
 runcmd:
   # Ubuntu image forces a root password change on first SSH — reset expiry
   - chage -d -1 root
+  # Node 22 via NodeSource (Ubuntu's nodejs v18 is too old for pi)
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
   # rtk — LLM context filter (needs explicit HOME, runcmd has none)
   - export HOME=/root; curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
   # chezmoi — dotfiles manager
