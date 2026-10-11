@@ -27,6 +27,7 @@ runcmd:
 users:
   - name: root
     shell: /usr/bin/zsh
+    lock_passwd: true
     ssh_authorized_keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBVA7AVX0xYKkja/CXPAEWtzukbEilaW4JeM04EzBki3 hetzner-dev
 
