@@ -109,7 +109,7 @@ Host dev-ai
   IdentitiesOnly yes
 ```
 
-A clean boot has a new host key. If SSH says the key changed: `ssh-keygen -R dev-ai`.
+A normal down/up keeps the SSH host key. A clean boot does not; `up` replaces the `dev-ai` entry in `known_hosts`. From another machine: `ssh-keygen -R dev-ai`.
 
 ## Config
 

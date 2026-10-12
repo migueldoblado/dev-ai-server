@@ -44,5 +44,7 @@ offline='{"Peer":{"nodekey:1":{"HostName":"dev-ai","Online":false,"TailscaleIPs"
 grep -q 'tailscale/authkey' "$BIN/dev-ai-server-up" || fail "up does not read the auth key"
 grep -q 'FIREWALL_NAME' "$BIN/dev-ai-server-up" || fail "up does not attach the firewall"
 grep -q 'tailscale-join' "$BIN/../cloud-config.yaml" || fail "cloud-config marker"
+grep -q 'ssh_deletekeys: false' "$BIN/dev-ai-server-up" || fail "up does not keep ssh host keys"
+grep -q 'ssh-keygen -R "$NAME"' "$BIN/dev-ai-server-up" || fail "up does not clear the MagicDNS host key"
 
 echo "ok"

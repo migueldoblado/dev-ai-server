@@ -203,6 +203,14 @@ echo "Waiting for cloud-init..."
 cloud_init_done='test -f /var/lib/cloud/instance/boot-finished && [ "$(stat -c %Y /proc/1)" -le "$(stat -c %Y /var/lib/cloud/instance/boot-finished)" ]'
 while ! ssh_try "${DEV_USER}@${SSH_HOST}" "$cloud_init_done" 2>/dev/null; do sleep 5; done
 ssh-keygen -R "$SSH_HOST" 2>/dev/null || true
+# A new Hetzner server is a new instance-id. cloud-init then deletes host keys.
+# Keep the keys from this boot so the next snapshot restore does not rotate them.
+ssh_key "${DEV_USER}@${SSH_HOST}" "printf '%s\n' 'ssh_deletekeys: false' | sudo tee /etc/cloud/cloud.cfg.d/99-keep-ssh-hostkeys.cfg >/dev/null"
+# herdr uses the MagicDNS name. The IP entry above is not the one it checks.
+ssh-keygen -R "$NAME" 2>/dev/null || true
+if ! ssh "${ssh_opts[@]}" -o StrictHostKeyChecking=accept-new "${DEV_USER}@${NAME}" true; then
+  echo "Could not pin host key for $NAME. If SSH says the key changed: ssh-keygen -R $NAME" >&2
+fi
 
 # ── inject bootstrap keys ──────────────────────────────────
 # gpg-agent cache does not survive the snapshot. Preset the passphrase again.
