@@ -11,6 +11,8 @@ IMAGE="${IMAGE:-ubuntu-26.04}"
 NAME="${NAME:-dev-ai}"
 SSH_KEY="$HOME/.ssh/hetzner_dev"
 KEYS_REPO="${KEYS_REPO:-}"
+# Must match users[].name in cloud-config.yaml.
+DEV_USER="ai-dev"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── preflight ──────────────────────────────────────────────
@@ -60,16 +62,20 @@ ssh_key()  { ssh  -i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=acc
 # ── wait for ssh + cloud-init ──────────────────────────────
 echo "Waiting for SSH..."
 ssh-keygen -R "$IP" 2>/dev/null || true
-while ! ssh_key root@"$IP" echo ok 2>/dev/null; do sleep 5; done
+while ! ssh_key "${DEV_USER}@${IP}" echo ok 2>/dev/null; do sleep 5; done
+
+# ai-dev exists before packages/runcmd finish. Bootstrap needs those tools.
+echo "Waiting for cloud-init..."
+while ! ssh_key "${DEV_USER}@${IP}" test -f /var/lib/cloud/instance/boot-finished; do sleep 5; done
 
 # ── inject bootstrap keys ──────────────────────────────────
 echo "Injecting bootstrap keys..."
-ssh_key root@"$IP" mkdir -p .ssh
-pass show gpg/private.key    | ssh_key root@"$IP" 'cat > /tmp/private.key'
-pass show gpg/passphrase     | ssh_key root@"$IP" 'cat > /tmp/passphrase'
-pass show ssh/github_personal | ssh_key root@"$IP" 'cat > ~/.ssh/github_personal'
+ssh_key "${DEV_USER}@${IP}" mkdir -p .ssh
+pass show gpg/private.key    | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/private.key'
+pass show gpg/passphrase     | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/passphrase'
+pass show ssh/github_personal | ssh_key "${DEV_USER}@${IP}" 'cat > ~/.ssh/github_personal'
 
-ssh_key root@"$IP" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
+ssh_key "${DEV_USER}@${IP}" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
 set -e
 # Configure GitHub SSH access
 chmod 600 ~/.ssh/github_personal
@@ -86,14 +92,14 @@ echo 'allow-preset-passphrase' > ~/.gnupg/gpg-agent.conf
 gpg --batch --import /tmp/private.key
 rm /tmp/private.key
 # pass show adds a trailing newline; it is not part of the passphrase
-head -n 1 /tmp/passphrase | tr -d '\r\n' > /root/.passphrase
-chmod 600 /root/.passphrase
+head -n 1 /tmp/passphrase | tr -d '\r\n' > "$HOME/.passphrase"
+chmod 600 "$HOME/.passphrase"
 rm /tmp/passphrase
 # Clone server keys repo
 git clone "$KEYS_REPO" ~/.password-store
 # --passphrase does not unlock the cv25519 subkey (gpg: Bad passphrase). Preset it.
-hex=$(od -An -tx1 /root/.passphrase | tr -d ' \n')
-rm /root/.passphrase
+hex=$(od -An -tx1 "$HOME/.passphrase" | tr -d ' \n')
+rm "$HOME/.passphrase"
 gpg-connect-agent /bye >/dev/null
 grips=$(gpg --list-secret-keys --with-colons | awk -F: '/^grp:/{print $10}')
 [ -n "$grips" ]
@@ -112,5 +118,5 @@ echo "Bootstrap complete."
 BOOTSTRAP
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Ready: ssh -i $SSH_KEY root@$IP && herdr"
+echo "Ready: ssh -i $SSH_KEY ${DEV_USER}@$IP && herdr"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

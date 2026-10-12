@@ -1,5 +1,8 @@
 #cloud-config
 
+# Login user is ai-dev, not root. Name must match DEV_USER in bin/dev-ai-server-up.
+disable_root: true
+
 packages:
   - pass
   - gnupg
@@ -12,25 +15,25 @@ packages:
   - build-essential
   - jq
 
-runcmd:
-  # Ubuntu image forces a root password change on first SSH — reset expiry
-  - chage -d -1 root
-  # rtk — LLM context filter (needs explicit HOME, runcmd has none)
-  - export HOME=/root; curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
-  # chezmoi — dotfiles manager
-  - curl -fsSL https://git.io/chezmoi | sh -s -- -b /usr/local/bin
-  # herdr — agent multiplexer (needs explicit HOME)
-  - export HOME=/root; curl -fsSL https://herdr.dev/install.sh | sh
-  # pi — coding agent
-  - npm install -g @earendil-works/pi-coding-agent
-  # zsh as default shell
-  - command -v zsh >> /etc/shells 2>/dev/null || true; chsh -s /usr/bin/zsh root
-
 users:
-  - name: root
+  - name: ai-dev
     shell: /usr/bin/zsh
     lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    groups: [sudo, docker]
     ssh_authorized_keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBVA7AVX0xYKkja/CXPAEWtzukbEilaW4JeM04EzBki3 hetzner-dev
 
-final_message: "Boot complete. SSH in for manual setup — see dev-ai-server README."
+runcmd:
+  # rtk and herdr install into $HOME/.local/bin; runcmd has no HOME
+  - runuser -u ai-dev -- sh -c 'curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh'
+  - curl -fsSL https://git.io/chezmoi | sh -s -- -b /usr/local/bin
+  - runuser -u ai-dev -- sh -c 'curl -fsSL https://herdr.dev/install.sh | sh'
+  - npm install -g @earendil-works/pi-coding-agent
+  # users_groups runs before packages, so zsh may not exist yet at user creation
+  - command -v zsh >> /etc/shells 2>/dev/null || true; chsh -s /usr/bin/zsh ai-dev
+  # Hetzner image allows root SSH with a password. Block it.
+  - printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/99-no-root.conf
+  - systemctl reload ssh
+
+final_message: "Boot complete. SSH in as ai-dev — see dev-ai-server README."

@@ -46,6 +46,8 @@ KEYS_REPO=<url> bin/dev-ai-server-up
 bin/dev-ai-server-down
 ```
 
+SSH user is `ai-dev` (passwordless sudo, `docker` group). Root SSH is disabled.
+
 ## Config
 
 | Variable | Default | Description |
