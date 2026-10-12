@@ -19,6 +19,8 @@ SNAPSHOT_LABEL="dev-ai-server=$NAME"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/snapshots.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/tailscale.sh"
 
 # ── preflight ──────────────────────────────────────────────
 if [ ! -f "$SSH_KEY" ]; then
@@ -41,11 +43,32 @@ if [ -z "$KEYS_REPO" ]; then
   echo "KEYS_REPO not set — needs the git URL of the server's encrypted secrets repo." >&2
   exit 1
 fi
+if ! command -v tailscale >/dev/null 2>&1; then
+  echo "tailscale is not installed on this machine. Install it and run: tailscale up" >&2
+  exit 1
+fi
+if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null; then
+  echo "Tailscale is not connected on this machine. Run: tailscale up" >&2
+  exit 1
+fi
+if ! pass show tailscale/authkey >/dev/null 2>&1; then
+  echo "Missing pass entry tailscale/authkey." >&2
+  echo "Create a reusable, pre-approved auth key (not ephemeral), then: pass insert -m tailscale/authkey" >&2
+  exit 1
+fi
+TS_KEY=$(pass show tailscale/authkey | head -n 1 | tr -d '\r\n')
+check_authkey "$TS_KEY"
 
 # ── prune snapshots, then pick the newest to boot ─────────
 echo "Checking snapshots..."
 prune_snapshots
 snapshot_id=$NEWEST_SNAPSHOT_ID
+
+# ── firewall: deny public inbound, allow Tailscale UDP ─────────
+if ! hcloud firewall describe "$FIREWALL_NAME" >/dev/null 2>&1; then
+  echo "Creating firewall $FIREWALL_NAME (inbound UDP 41641 only)..."
+  hcloud firewall create --name "$FIREWALL_NAME" --rules-file "$SCRIPT_DIR/../firewall-tailscale.json"
+fi
 
 # ── create server ──────────────────────────────────────────
 if [ -n "$snapshot_id" ]; then
@@ -55,15 +78,20 @@ if [ -n "$snapshot_id" ]; then
     --name "$NAME" \
     --type "$SERVER_TYPE" \
     --location "$LOCATION" \
-    --image "$snapshot_id"
+    --image "$snapshot_id" \
+    --firewall "$FIREWALL_NAME"
 else
   echo "Creating server: $NAME ($SERVER_TYPE, $LOCATION, $IMAGE)"
+  USER_DATA=$(mktemp)
+  trap 'rm -f "$USER_DATA"' EXIT
+  render_user_data "$SCRIPT_DIR/../cloud-config.yaml" "$TS_KEY" "$NAME" > "$USER_DATA"
   hcloud server create --quiet \
     --name "$NAME" \
     --type "$SERVER_TYPE" \
     --location "$LOCATION" \
     --image "$IMAGE" \
-    --user-data-from-file "$SCRIPT_DIR/../cloud-config.yaml"
+    --user-data-from-file "$USER_DATA" \
+    --firewall "$FIREWALL_NAME"
 fi
 
 echo "Waiting for IP..."
@@ -75,6 +103,53 @@ while true; do
   fi
   sleep 5
 done
+
+detach_firewall() {
+  hcloud firewall remove-from-resource --type server --server "$NAME" "$FIREWALL_NAME" || true
+}
+attach_firewall() {
+  if hcloud firewall apply-to-resource --type server --server "$NAME" "$FIREWALL_NAME"; then
+    return 0
+  fi
+  # applied_to.server is only an id, not a name.
+  fw_id=$(hcloud firewall describe "$FIREWALL_NAME" -o json | jq -r '.id')
+  hcloud server describe "$NAME" -o json | jq -e --argjson id "$fw_id" '
+    .public_net.firewalls[]? | select(.id == $id)
+  ' >/dev/null
+}
+# Prints the peer IPv4, or fails. $1 is how many 5s tries.
+wait_peer() {
+  local tries=$1 i ip
+  for i in $(seq 1 "$tries"); do
+    ip=$(tailscale status --json | ts_peer_ip "$NAME" || true)
+    if [ -n "$ip" ]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+# Snapshot with node state reconnects in seconds. A fresh image joins at the end of cloud-init.
+via_ts=0
+SSH_HOST=$IP
+TS_IP=""
+if [ -n "$snapshot_id" ]; then
+  peer_tries=12
+else
+  peer_tries=72
+fi
+echo "Waiting for $NAME on the tailnet..."
+if TS_IP=$(wait_peer "$peer_tries"); then
+  echo "Tailnet address: $TS_IP"
+  SSH_HOST=$TS_IP
+  via_ts=1
+else
+  # Old snapshots have no node state. Open public SSH, join, close it again.
+  echo "No tailnet peer. Opening public SSH to join from here." >&2
+  detach_firewall
+fi
 
 # ── ssh helpers ────────────────────────────────────────────
 ssh_opts=(
@@ -93,30 +168,43 @@ ssh_key() {
 # ── wait for ssh + cloud-init ──────────────────────────────
 echo "Waiting for SSH key (there is no password)..."
 ssh-keygen -R "$IP" 2>/dev/null || true
-while ! ssh_try "${DEV_USER}@${IP}" echo ok 2>/dev/null; do sleep 5; done
+ssh-keygen -R "$SSH_HOST" 2>/dev/null || true
+n=0
+while ! ssh_try "${DEV_USER}@${SSH_HOST}" echo ok 2>/dev/null; do
+  n=$((n + 1))
+  if [ "$via_ts" = 1 ] && [ "$n" -ge 12 ]; then
+    echo "Tailscale SSH failed. Opening public SSH." >&2
+    detach_firewall
+    via_ts=0
+    SSH_HOST=$IP
+    ssh-keygen -R "$IP" 2>/dev/null || true
+    n=0
+  fi
+  sleep 5
+done
 
 # The snapshot still has the previous boot-finished until cloud-init replaces it.
 echo "Waiting for cloud-init..."
 cloud_init_done='test -f /var/lib/cloud/instance/boot-finished && [ "$(stat -c %Y /proc/1)" -le "$(stat -c %Y /var/lib/cloud/instance/boot-finished)" ]'
-while ! ssh_try "${DEV_USER}@${IP}" "$cloud_init_done" 2>/dev/null; do sleep 5; done
-ssh-keygen -R "$IP" 2>/dev/null || true
+while ! ssh_try "${DEV_USER}@${SSH_HOST}" "$cloud_init_done" 2>/dev/null; do sleep 5; done
+ssh-keygen -R "$SSH_HOST" 2>/dev/null || true
 
 # ── inject bootstrap keys ──────────────────────────────────
 # gpg-agent cache does not survive the snapshot. Preset the passphrase again.
 # No marker on snapshots taken before this script. password-store means bootstrap finished.
-if [ -n "$snapshot_id" ] && ssh_key "${DEV_USER}@${IP}" 'test -f .dev-ai-bootstrapped || { test -d .password-store && test -f .ssh/github_personal; }'; then
+if [ -n "$snapshot_id" ] && ssh_key "${DEV_USER}@${SSH_HOST}" 'test -f .dev-ai-bootstrapped || { test -d .password-store && test -f .ssh/github_personal; }'; then
   echo "Snapshot already bootstrapped; unlocking gpg."
   mode=unlock
 else
   echo "Injecting bootstrap keys..."
   mode=full
-  ssh_key "${DEV_USER}@${IP}" mkdir -p .ssh
-  pass show gpg/private.key | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/private.key'
-  pass show ssh/github_personal | ssh_key "${DEV_USER}@${IP}" 'cat > ~/.ssh/github_personal'
+  ssh_key "${DEV_USER}@${SSH_HOST}" mkdir -p .ssh
+  pass show gpg/private.key | ssh_key "${DEV_USER}@${SSH_HOST}" 'cat > /tmp/private.key'
+  pass show ssh/github_personal | ssh_key "${DEV_USER}@${SSH_HOST}" 'cat > ~/.ssh/github_personal'
 fi
-pass show gpg/passphrase | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/passphrase'
+pass show gpg/passphrase | ssh_key "${DEV_USER}@${SSH_HOST}" 'cat > /tmp/passphrase'
 
-ssh_key "${DEV_USER}@${IP}" MODE="$mode" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
+ssh_key "${DEV_USER}@${SSH_HOST}" MODE="$mode" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
 set -euo pipefail
 trap 'rm -f /tmp/passphrase /tmp/private.key "$HOME/.passphrase"' EXIT
 chmod 600 /tmp/passphrase
@@ -168,9 +256,27 @@ else
 fi
 BOOTSTRAP
 
+if [ "$via_ts" = 0 ]; then
+  echo "Joining tailnet over SSH..."
+  ssh_key "${DEV_USER}@${SSH_HOST}" 'command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sudo sh'
+  printf '%s' "$TS_KEY" | ssh_key "${DEV_USER}@${SSH_HOST}" 'sudo tee /etc/tailscale/authkey >/dev/null && sudo chmod 600 /etc/tailscale/authkey'
+  ssh_key "${DEV_USER}@${SSH_HOST}" "sudo tailscale up --auth-key=file:/etc/tailscale/authkey --hostname=$NAME --accept-dns=false --timeout=120s && sudo rm -f /etc/tailscale/authkey"
+  if TS_IP=$(wait_peer 12); then
+    echo "Tailnet address: $TS_IP"
+    attach_firewall
+  else
+    echo "Tailscale join failed. Firewall left off so public SSH still works." >&2
+    exit 1
+  fi
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ -n "$snapshot_id" ]; then
   echo "Restored snapshot $snapshot_id"
 fi
-echo "Ready: ssh -i $SSH_KEY ${DEV_USER}@$IP && herdr"
+connect=$IP
+if [ -n "$TS_IP" ]; then
+  connect=$TS_IP
+fi
+echo "Ready: ssh -i $SSH_KEY ${DEV_USER}@$connect && herdr"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

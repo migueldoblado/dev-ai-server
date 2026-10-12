@@ -35,5 +35,7 @@ runcmd:
   # Hetzner image allows root SSH with a password. Block it.
   - printf '%s\n' 'PermitRootLogin no' > /etc/ssh/sshd_config.d/99-no-root.conf
   - systemctl reload ssh
+  # dev-ai-server-up replaces this line with the tailscale join. Do not delete it.
+  - "true" # tailscale-join
 
 final_message: "Boot complete. SSH in as ai-dev — see dev-ai-server README."

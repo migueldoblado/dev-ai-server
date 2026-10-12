@@ -16,6 +16,7 @@ All remote repos are private except dotfiles.
 ## Prerequisites
 
 - [hcloud CLI](https://github.com/hetznercloud/cli) installed and authenticated
+- [Tailscale](https://tailscale.com/download) installed on the laptop and logged in (`tailscale up`)
 - SSH key `~/.ssh/hetzner_dev` (private key on laptop, public key is in `cloud-config.yaml`)
 - A private GitHub repo for GPG-encrypted runtime secrets (set as `KEYS_REPO`)
 - A GitHub repo with chezmoi dotfiles for the server (public, hardcoded in the script)
@@ -33,6 +34,7 @@ pass insert hetzner/token                # Hetzner Cloud API token
 pass insert ssh/github_personal          # GitHub SSH private key
 pass insert gpg/private.key              # GPG private key (for dev-ai-server)
 pass insert gpg/passphrase               # passphrase of that private key
+pass insert -m tailscale/authkey         # reusable, pre-approved, not ephemeral
 git push
 ```
 
@@ -67,6 +69,16 @@ The snapshot includes keys under `~`. Same trust boundary as the server disk.
 
 SSH user is `ai-dev` (passwordless sudo, `docker` group). Root SSH is disabled.
 
+## Tailscale
+
+Public inbound is closed. `up` creates a Hetzner firewall named `dev-ai-ts` the first time and attaches it on every create. The only inbound rule is UDP 41641, so Tailscale can connect directly. The script does not overwrite that firewall if you change its rules later.
+
+`up` still uses `~/.ssh/hetzner_dev`. It SSHes to the server's Tailscale IPv4, not the public IP. Tailscale SSH is off: it would ignore that key.
+
+The auth key must be reusable and pre-approved, and must not be ephemeral. An ephemeral node is deleted when the server is destroyed, so the next `up` has to reopen public SSH to join again. After a successful join the key is removed from the disk. The node state stays, and that is what the snapshot reconnects with. Leave the offline node in the admin console between `down` and `up`. Deleting it forces one public-SSH rejoin.
+
+A snapshot taken before Tailscale was installed has no node state. That `up` opens public SSH, joins, then attaches the firewall again.
+
 ## Config
 
 | Variable | Default | Description |
@@ -95,3 +107,4 @@ bin/dev-ai-server-up
 | **pass** | GPG-encrypted secrets |
 | **docker** | container runtime |
 | **zsh** | default shell |
+| **tailscale** | private path in; public SSH stays closed |
