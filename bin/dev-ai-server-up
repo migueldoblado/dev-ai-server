@@ -106,7 +106,8 @@ for grip in $grips; do
 done
 unset hex
 # Apply dotfiles (templates use {{ pass }} to pull API keys)
-chezmoi init --apply migueldoblado/dev-ai-server-dotfiles
+# SSH: github_personal is installed above. HTTPS has no credential helper.
+chezmoi init --apply --ssh migueldoblado/dev-ai-server-dotfiles
 echo "Bootstrap complete."
 BOOTSTRAP
 
