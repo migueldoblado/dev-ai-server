@@ -57,10 +57,15 @@ while true; do
 done
 
 # ── ssh helpers ────────────────────────────────────────────
-ssh_key()  { ssh  -i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$@"; }
+ssh_key()  {
+  # BatchMode: Hetzner allows passwords until cloud-init installs the key.
+  ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=accept-new "$@"
+}
 
 # ── wait for ssh + cloud-init ──────────────────────────────
-echo "Waiting for SSH..."
+echo "Waiting for SSH key (there is no password)..."
 ssh-keygen -R "$IP" 2>/dev/null || true
 while ! ssh_key "${DEV_USER}@${IP}" echo ok 2>/dev/null; do sleep 5; done
 
