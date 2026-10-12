@@ -60,8 +60,23 @@ TS_KEY=$(pass show tailscale/authkey | head -n 1 | tr -d '\r\n')
 check_authkey "$TS_KEY"
 
 # ── prune snapshots, then pick the newest to boot ─────────
+# CLEAN=1 drops every snapshot for this NAME and boots the image.
+case "${CLEAN:-}" in
+  "") ;;
+  1) ;;
+  *) echo "CLEAN must be 1 or unset." >&2; exit 1 ;;
+esac
 echo "Checking snapshots..."
-prune_snapshots
+if [ "${CLEAN:-}" = 1 ]; then
+  if hcloud server describe "$NAME" >/dev/null 2>&1; then
+    echo "$NAME still exists. Clean boot does not save it. Delete it first: hcloud server delete $NAME" >&2
+    exit 1
+  fi
+  echo "Clean boot: deleting snapshots labeled $SNAPSHOT_LABEL"
+  delete_snapshots
+else
+  prune_snapshots
+fi
 snapshot_id=$NEWEST_SNAPSHOT_ID
 
 # ── firewall: deny public inbound, allow Tailscale UDP ─────────

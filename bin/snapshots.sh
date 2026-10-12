@@ -35,3 +35,22 @@ prune_snapshots() {
   fi
   NEWEST_SNAPSHOT_ID=$(printf '%s' "$snapshots" | newest_snapshot_id)
 }
+
+# Deletes every unprotected available snapshot. Fails if any remain.
+delete_snapshots() {
+  local snapshots ids left
+  snapshots=$(hcloud image list --type snapshot --selector "$SNAPSHOT_LABEL" -o json)
+  ids=$(printf '%s' "$snapshots" | snapshot_ids_beyond 0)
+  if [ -n "$ids" ]; then
+    echo "Deleting snapshots: ${ids//$'\n'/ }"
+    # shellcheck disable=SC2086
+    hcloud image delete $ids
+  fi
+  left=$(hcloud image list --type snapshot --selector "$SNAPSHOT_LABEL" -o json \
+    | jq '[.[] | select(.status == "available" or .status == "creating")] | length')
+  if [ "$left" != 0 ]; then
+    echo "Snapshots for $SNAPSHOT_LABEL still exist (delete-protected or still creating). Not booting." >&2
+    exit 1
+  fi
+  NEWEST_SNAPSHOT_ID=
+}

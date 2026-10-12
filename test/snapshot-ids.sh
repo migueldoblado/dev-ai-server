@@ -28,6 +28,7 @@ three='[
 ]'
 [ "$(ids "$three")" = "1 " ] || fail "should drop only the oldest, got [$(ids "$three")]"
 [ "$(newest "$three")" = 3 ] || fail "newest should be 3"
+[ "$(printf '%s' "$three" | snapshot_ids_beyond 0 | tr '\n' ' ')" = "3 2 1 " ] || fail "keep 0 should list all"
 
 mixed='[
   {"id":9,"status":"creating","created":"2026-02-01T00:00:00Z","protection":{"delete":false}},
@@ -45,5 +46,7 @@ grep -q 'dev-ai-server=$NAME' "$BIN/dev-ai-server-down" || fail "down label"
 grep -q 'KEEP_SNAPSHOTS=2' "$BIN/snapshots.sh" || fail "keep count"
 grep -q 'prune_snapshots' "$BIN/dev-ai-server-up" || fail "up does not prune"
 grep -q 'prune_snapshots' "$BIN/dev-ai-server-down" || fail "down does not prune"
+grep -q 'delete_snapshots' "$BIN/dev-ai-server-up" || fail "up has no clean wipe"
+grep -q 'CLEAN:-' "$BIN/dev-ai-server-up" || fail "up has no CLEAN switch"
 
 echo "ok"
