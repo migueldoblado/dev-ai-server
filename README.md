@@ -34,7 +34,7 @@ pass insert hetzner/token                # Hetzner Cloud API token
 pass insert ssh/github_personal          # GitHub SSH private key
 pass insert gpg/private.key              # GPG private key (for dev-ai-server)
 pass insert gpg/passphrase               # passphrase of that private key
-pass insert -m tailscale/authkey         # reusable, pre-approved, not ephemeral
+pass insert -m tailscale/authkey         # reusable, not ephemeral
 git push
 ```
 
@@ -75,7 +75,7 @@ Public inbound is closed. `up` creates a Hetzner firewall named `dev-ai-ts` the 
 
 `up` still uses `~/.ssh/hetzner_dev`. It SSHes to the server's Tailscale IPv4, not the public IP. Tailscale SSH is off: it would ignore that key.
 
-The auth key must be reusable and pre-approved, and must not be ephemeral. An ephemeral node is deleted when the server is destroyed, so the next `up` has to reopen public SSH to join again. After a successful join the key is removed from the disk. The node state stays, and that is what the snapshot reconnects with. Leave the offline node in the admin console between `down` and `up`. Deleting it forces one public-SSH rejoin.
+The auth key must be reusable, and must not be ephemeral. Pre-approved is only shown if device approval is enabled; leave that off. An ephemeral node is deleted when the server is destroyed, so the next `up` has to reopen public SSH to join again. After a successful join the key is removed from the disk. The node state stays, and that is what the snapshot reconnects with. Leave the offline node in the admin console between `down` and `up`. Deleting it forces one public-SSH rejoin.
 
 A snapshot taken before Tailscale was installed has no node state. That `up` opens public SSH, joins, then attaches the firewall again.
 

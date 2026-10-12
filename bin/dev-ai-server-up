@@ -53,7 +53,7 @@ if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/
 fi
 if ! pass show tailscale/authkey >/dev/null 2>&1; then
   echo "Missing pass entry tailscale/authkey." >&2
-  echo "Create a reusable, pre-approved auth key (not ephemeral), then: pass insert -m tailscale/authkey" >&2
+  echo "Create a reusable auth key (not ephemeral), then: pass insert -m tailscale/authkey" >&2
   exit 1
 fi
 TS_KEY=$(pass show tailscale/authkey | head -n 1 | tr -d '\r\n')
