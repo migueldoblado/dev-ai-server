@@ -22,6 +22,10 @@ if ! pass show gpg/private.key >/dev/null 2>&1; then
   echo "Missing pass entry gpg/private.key in default store." >&2
   exit 1
 fi
+if ! pass show gpg/passphrase >/dev/null 2>&1; then
+  echo "Missing pass entry gpg/passphrase in default store." >&2
+  exit 1
+fi
 if ! pass show ssh/github_personal >/dev/null 2>&1; then
   echo "Missing pass entry ssh/github_personal in default store." >&2
   exit 1
@@ -75,19 +79,32 @@ Host github.com
 EOF
 chmod 600 ~/.ssh/config
 ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-# Import server GPG key
+# Import server GPG key. Agent reads this conf only at start.
+mkdir -p ~/.gnupg
+chmod 700 ~/.gnupg
+echo 'allow-preset-passphrase' > ~/.gnupg/gpg-agent.conf
 gpg --batch --import /tmp/private.key
 rm /tmp/private.key
-# Enable loopback pinentry + store passphrase for non-interactive gpg
-echo 'allow-loopback-pinentry' >> ~/.gnupg/gpg-agent.conf
-gpgconf --reload gpg-agent
-cat /tmp/passphrase > /root/.passphrase
+# pass show adds a trailing newline; it is not part of the passphrase
+head -n 1 /tmp/passphrase | tr -d '\r\n' > /root/.passphrase
 chmod 600 /root/.passphrase
 rm /tmp/passphrase
-# Strip trailing newlines (pass show adds one, gpg rejects it)
-export PASSWORD_STORE_GPG_OPTS="--pinentry-mode loopback --passphrase $(tr -d '\n' < /root/.passphrase)"
 # Clone server keys repo
 git clone "$KEYS_REPO" ~/.password-store
+# --passphrase does not unlock the cv25519 subkey (gpg: Bad passphrase). Preset it.
+hex=$(od -An -tx1 /root/.passphrase | tr -d ' \n')
+rm /root/.passphrase
+gpg-connect-agent /bye >/dev/null
+grips=$(gpg --list-secret-keys --with-colons | awk -F: '/^grp:/{print $10}')
+[ -n "$grips" ]
+for grip in $grips; do
+  out=$(gpg-connect-agent "PRESET_PASSPHRASE $grip -1 $hex" /bye)
+  case "$out" in
+    OK) ;;
+    *) echo "gpg-agent rejected passphrase preset: $out" >&2; exit 1 ;;
+  esac
+done
+unset hex
 # Apply dotfiles (templates use {{ pass }} to pull API keys)
 chezmoi init --apply migueldoblado/dev-ai-server-dotfiles
 echo "Bootstrap complete."

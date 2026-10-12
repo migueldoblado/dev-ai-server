@@ -32,6 +32,7 @@ pass init <your-gpg-key-id>              # creates .gpg-id
 pass insert hetzner/token                # Hetzner Cloud API token
 pass insert ssh/github_personal          # GitHub SSH private key
 pass insert gpg/private.key              # GPG private key (for dev-ai-server)
+pass insert gpg/passphrase               # passphrase of that private key
 git push
 ```
 
