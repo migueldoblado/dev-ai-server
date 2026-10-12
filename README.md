@@ -1,6 +1,6 @@
 # dev-ai-server
 
-Ephemeral AI dev server on Hetzner Cloud. One command to create a fully-bootstrapped server, one to destroy it.
+Ephemeral AI dev server on Hetzner Cloud. One command to create a fully-bootstrapped server, one to snapshot the disk and destroy it. The next create restores that snapshot.
 
 ## Repos
 
@@ -9,7 +9,7 @@ Ephemeral AI dev server on Hetzner Cloud. One command to create a fully-bootstra
 | Orchestration (this one) | scripts + cloud-config | `bin/`, `cloud-config.yaml` |
 | Bootstrap keys (local) | keys injected into the server once per boot, managed via pass | SSH key, GPG key, Hetzner token |
 | Encrypted secrets (private) | GPG-encrypted runtime secrets for the server, cloned at boot | API keys, tokens |
-| Dotfiles (public) | chezmoi source for the server, applied at boot | `.zshrc`, `.gitconfig`, pi config |
+| Dotfiles (public) | chezmoi source for the server, applied on first boot | `.zshrc`, `.gitconfig`, pi config |
 
 All remote repos are private except dotfiles.
 
@@ -39,12 +39,31 @@ git push
 ## Commands
 
 ```bash
-# create + bootstrap (fully automatic)
+# create + bootstrap, or restore the latest snapshot
 KEYS_REPO=<url> bin/dev-ai-server-up
 
-# destroy (stops hourly billing)
+# snapshot, then delete the server (stops hourly billing)
 bin/dev-ai-server-down
 ```
+
+`down` can take several minutes. Do not interrupt it: the server is deleted only after the snapshot is available.
+
+## Snapshots
+
+`down` powers the server off, snapshots the whole disk, then deletes the server. The next `up` boots that snapshot, so files, packages, and home are as you left them. Cloud-config and chezmoi do not run again. Cloud-init still configures the new network. GPG is unlocked again so `pass` works. The IP changes.
+
+`up` and `down` keep the 2 newest snapshots labeled `dev-ai-server=<NAME>` and delete the rest. Hetzner bills every snapshot that still exists. No snapshot yet: `up` boots a fresh image and bootstraps, as before.
+
+A different `NAME` is a different snapshot set and is not pruned with the default name. The server type must be the same architecture, and its disk must be at least as large as the snapshot.
+
+Clean boot (drops the saved disk):
+
+```bash
+hcloud image list --type snapshot --selector dev-ai-server=dev-ai
+hcloud image delete <id>...
+```
+
+The snapshot includes keys under `~`. Same trust boundary as the server disk.
 
 SSH user is `ai-dev` (passwordless sudo, `docker` group). Root SSH is disabled.
 

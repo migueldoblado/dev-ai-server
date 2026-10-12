@@ -1,5 +1,6 @@
 #!/bin/bash
 # dev-ai-server-up — create, bootstrap, and connect the dev server.
+# If a snapshot from down exists, boot that disk instead of a fresh image.
 # Injects GPG + GitHub keys from the default pass store over SSH,
 # then the server clones its keys repo and applies dotfiles.
 
@@ -13,7 +14,11 @@ SSH_KEY="$HOME/.ssh/hetzner_dev"
 KEYS_REPO="${KEYS_REPO:-}"
 # Must match users[].name in cloud-config.yaml.
 DEV_USER="ai-dev"
+# Label must match bin/dev-ai-server-down.
+SNAPSHOT_LABEL="dev-ai-server=$NAME"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/snapshots.sh"
 
 # ── preflight ──────────────────────────────────────────────
 if [ ! -f "$SSH_KEY" ]; then
@@ -37,14 +42,29 @@ if [ -z "$KEYS_REPO" ]; then
   exit 1
 fi
 
+# ── prune snapshots, then pick the newest to boot ─────────
+echo "Checking snapshots..."
+prune_snapshots
+snapshot_id=$NEWEST_SNAPSHOT_ID
+
 # ── create server ──────────────────────────────────────────
-echo "Creating server: $NAME ($SERVER_TYPE, $LOCATION, $IMAGE)"
-hcloud server create --quiet \
-  --name "$NAME" \
-  --type "$SERVER_TYPE" \
-  --location "$LOCATION" \
-  --image "$IMAGE" \
-  --user-data-from-file "$SCRIPT_DIR/../cloud-config.yaml"
+if [ -n "$snapshot_id" ]; then
+  echo "Creating $NAME from snapshot $snapshot_id ($SERVER_TYPE, $LOCATION)"
+  # No cloud-config here. user-data would re-run runcmd and undo the snapshot.
+  hcloud server create --quiet \
+    --name "$NAME" \
+    --type "$SERVER_TYPE" \
+    --location "$LOCATION" \
+    --image "$snapshot_id"
+else
+  echo "Creating server: $NAME ($SERVER_TYPE, $LOCATION, $IMAGE)"
+  hcloud server create --quiet \
+    --name "$NAME" \
+    --type "$SERVER_TYPE" \
+    --location "$LOCATION" \
+    --image "$IMAGE" \
+    --user-data-from-file "$SCRIPT_DIR/../cloud-config.yaml"
+fi
 
 echo "Waiting for IP..."
 while true; do
@@ -57,54 +77,72 @@ while true; do
 done
 
 # ── ssh helpers ────────────────────────────────────────────
-ssh_key()  {
-  # BatchMode: Hetzner allows passwords until cloud-init installs the key.
-  ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o PreferredAuthentications=publickey -o ConnectTimeout=5 \
-    -o StrictHostKeyChecking=accept-new "$@"
+ssh_opts=(
+  -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes
+  -o PreferredAuthentications=publickey -o ConnectTimeout=5
+)
+# A restored disk already has sshd. cloud-init then regenerates host keys.
+# Don't store the key seen during that window or the next SSH hangs.
+ssh_try() {
+  ssh "${ssh_opts[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$@"
+}
+ssh_key() {
+  ssh "${ssh_opts[@]}" -o StrictHostKeyChecking=accept-new "$@"
 }
 
 # ── wait for ssh + cloud-init ──────────────────────────────
 echo "Waiting for SSH key (there is no password)..."
 ssh-keygen -R "$IP" 2>/dev/null || true
-while ! ssh_key "${DEV_USER}@${IP}" echo ok 2>/dev/null; do sleep 5; done
+while ! ssh_try "${DEV_USER}@${IP}" echo ok 2>/dev/null; do sleep 5; done
 
-# ai-dev exists before packages/runcmd finish. Bootstrap needs those tools.
+# The snapshot still has the previous boot-finished until cloud-init replaces it.
 echo "Waiting for cloud-init..."
-while ! ssh_key "${DEV_USER}@${IP}" test -f /var/lib/cloud/instance/boot-finished; do sleep 5; done
+cloud_init_done='test -f /var/lib/cloud/instance/boot-finished && [ "$(stat -c %Y /proc/1)" -le "$(stat -c %Y /var/lib/cloud/instance/boot-finished)" ]'
+while ! ssh_try "${DEV_USER}@${IP}" "$cloud_init_done" 2>/dev/null; do sleep 5; done
+ssh-keygen -R "$IP" 2>/dev/null || true
 
 # ── inject bootstrap keys ──────────────────────────────────
-echo "Injecting bootstrap keys..."
-ssh_key "${DEV_USER}@${IP}" mkdir -p .ssh
-pass show gpg/private.key    | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/private.key'
-pass show gpg/passphrase     | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/passphrase'
-pass show ssh/github_personal | ssh_key "${DEV_USER}@${IP}" 'cat > ~/.ssh/github_personal'
+# gpg-agent cache does not survive the snapshot. Preset the passphrase again.
+# No marker on snapshots taken before this script. password-store means bootstrap finished.
+if [ -n "$snapshot_id" ] && ssh_key "${DEV_USER}@${IP}" 'test -f .dev-ai-bootstrapped || { test -d .password-store && test -f .ssh/github_personal; }'; then
+  echo "Snapshot already bootstrapped; unlocking gpg."
+  mode=unlock
+else
+  echo "Injecting bootstrap keys..."
+  mode=full
+  ssh_key "${DEV_USER}@${IP}" mkdir -p .ssh
+  pass show gpg/private.key | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/private.key'
+  pass show ssh/github_personal | ssh_key "${DEV_USER}@${IP}" 'cat > ~/.ssh/github_personal'
+fi
+pass show gpg/passphrase | ssh_key "${DEV_USER}@${IP}" 'cat > /tmp/passphrase'
 
-ssh_key "${DEV_USER}@${IP}" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
-set -e
-# Configure GitHub SSH access
-chmod 600 ~/.ssh/github_personal
-cat > ~/.ssh/config <<'EOF'
+ssh_key "${DEV_USER}@${IP}" MODE="$mode" KEYS_REPO="$KEYS_REPO" bash <<'BOOTSTRAP'
+set -euo pipefail
+trap 'rm -f /tmp/passphrase /tmp/private.key "$HOME/.passphrase"' EXIT
+chmod 600 /tmp/passphrase
+if [ "$MODE" = full ]; then
+  chmod 600 ~/.ssh/github_personal /tmp/private.key
+  cat > ~/.ssh/config <<'EOF'
 Host github.com
   IdentityFile ~/.ssh/github_personal
 EOF
-chmod 600 ~/.ssh/config
-ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-# Import server GPG key. Agent reads this conf only at start.
-mkdir -p ~/.gnupg
-chmod 700 ~/.gnupg
-echo 'allow-preset-passphrase' > ~/.gnupg/gpg-agent.conf
-gpg --batch --import /tmp/private.key
-rm /tmp/private.key
+  chmod 600 ~/.ssh/config
+  ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+  mkdir -p ~/.gnupg
+  chmod 700 ~/.gnupg
+  # Agent reads this conf only at start.
+  echo 'allow-preset-passphrase' > ~/.gnupg/gpg-agent.conf
+  gpg --batch --import /tmp/private.key
+  if [ ! -d "$HOME/.password-store/.git" ]; then
+    git clone "$KEYS_REPO" "$HOME/.password-store"
+  fi
+fi
 # pass show adds a trailing newline; it is not part of the passphrase
 head -n 1 /tmp/passphrase | tr -d '\r\n' > "$HOME/.passphrase"
 chmod 600 "$HOME/.passphrase"
-rm /tmp/passphrase
-# Clone server keys repo
-git clone "$KEYS_REPO" ~/.password-store
 # --passphrase does not unlock the cv25519 subkey (gpg: Bad passphrase). Preset it.
 hex=$(od -An -tx1 "$HOME/.passphrase" | tr -d ' \n')
-rm "$HOME/.passphrase"
+rm -f "$HOME/.passphrase" /tmp/passphrase
 gpg-connect-agent /bye >/dev/null
 grips=$(gpg --list-secret-keys --with-colons | awk -F: '/^grp:/{print $10}')
 [ -n "$grips" ]
@@ -116,12 +154,23 @@ for grip in $grips; do
   esac
 done
 unset hex
-# Apply dotfiles (templates use {{ pass }} to pull API keys)
-# SSH: github_personal is installed above. HTTPS has no credential helper.
-chezmoi init --apply --ssh migueldoblado/dev-ai-server-dotfiles
-echo "Bootstrap complete."
+if [ "$MODE" = full ]; then
+  # SSH: github_personal is installed above. HTTPS has no credential helper.
+  if [ ! -d "$HOME/.local/share/chezmoi" ]; then
+    chezmoi init --apply --ssh migueldoblado/dev-ai-server-dotfiles
+  else
+    chezmoi apply
+  fi
+  touch "$HOME/.dev-ai-bootstrapped"
+  echo "Bootstrap complete."
+else
+  echo "Unlocked gpg from snapshot."
+fi
 BOOTSTRAP
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ -n "$snapshot_id" ]; then
+  echo "Restored snapshot $snapshot_id"
+fi
 echo "Ready: ssh -i $SSH_KEY ${DEV_USER}@$IP && herdr"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

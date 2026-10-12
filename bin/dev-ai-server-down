@@ -1,9 +1,35 @@
 #!/bin/bash
-# dev-ai-server-down — delete the dev server. Stops hourly billing.
-# Override name: NAME=other bin/dev-ai-server-down
+# dev-ai-server-down — snapshot the disk, then delete the server.
+# The next up restores this snapshot. Override name: NAME=other bin/dev-ai-server-down
 
 set -euo pipefail
 
 NAME="${NAME:-dev-ai}"
+# Label must match bin/dev-ai-server-up.
+SNAPSHOT_LABEL="dev-ai-server=$NAME"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/snapshots.sh"
 
-hcloud server delete "$NAME" && echo "Deleted $NAME"
+status=$(hcloud server describe "$NAME" -o json | jq -r '.status')
+if [ "$status" != "off" ]; then
+  echo "Stopping $NAME..."
+  # Power off first so the snapshot is a consistent disk, not a crash copy.
+  hcloud server shutdown --wait --wait-timeout 180s "$NAME" || hcloud server poweroff "$NAME" || true
+  status=$(hcloud server describe "$NAME" -o json | jq -r '.status')
+  if [ "$status" != "off" ]; then
+    echo "Server $NAME is $status, not off — not snapshotting." >&2
+    exit 1
+  fi
+fi
+
+echo "Snapshotting $NAME (this waits until the image is available)..."
+hcloud server create-image --type snapshot \
+  --description "$NAME $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --label "$SNAPSHOT_LABEL" \
+  "$NAME"
+
+hcloud server delete "$NAME"
+# Also pruned at up. Doing it here too so idle time is not billed for a third snapshot.
+prune_snapshots
+echo "Deleted $NAME. Snapshot kept; next up restores it."
