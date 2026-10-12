@@ -84,7 +84,8 @@ gpgconf --reload gpg-agent
 cat /tmp/passphrase > /root/.passphrase
 chmod 600 /root/.passphrase
 rm /tmp/passphrase
-export PASSWORD_STORE_GPG_OPTS="--pinentry-mode loopback --passphrase $(cat /root/.passphrase)"
+# Strip trailing newlines (pass show adds one, gpg rejects it)
+export PASSWORD_STORE_GPG_OPTS="--pinentry-mode loopback --passphrase $(tr -d '\n' < /root/.passphrase)"
 # Clone server keys repo
 git clone "$KEYS_REPO" ~/.password-store
 # Apply dotfiles (templates use {{ pass }} to pull API keys)
