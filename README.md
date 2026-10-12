@@ -69,11 +69,38 @@ SSH user is `ai-dev` (passwordless sudo, `docker` group). Root SSH is disabled.
 
 ## Tailscale
 
-Public inbound is closed. `up` creates a Hetzner firewall named `dev-ai-ts` the first time and attaches it on every create. The only inbound rule is UDP 41641, so Tailscale can connect directly. The script does not overwrite that firewall if you change its rules later.
+Public port 22 stays closed. SSH is still `~/.ssh/hetzner_dev`, over the tailnet. The scripts do not change your tailnet policy and do not turn on Tailscale SSH (`--ssh` would ignore that key).
 
-`up` still uses `~/.ssh/hetzner_dev`. It SSHes to the server's Tailscale IPv4, not the public IP. Tailscale SSH is off: it would ignore that key.
+### One-time setup
 
-Later, with Tailscale running, the stable name is the server name (`dev-ai`). MagicDNS must be on. Same entry for a terminal and for VS Code Remote SSH:
+1. Install Tailscale on the laptop and run `tailscale up`. `up` exits if that status is not Running.
+2. [DNS](https://login.tailscale.com/admin/dns): MagicDNS on. Tailnets created after October 2022 already have it. This is what makes the name `dev-ai` resolve. The `100.x` address printed by `up` works without it, until the next clean boot.
+3. [Keys](https://login.tailscale.com/admin/settings/keys): **Generate auth key**.
+   - Reusable: on. A fresh image and a lost node both need the same key.
+   - Ephemeral: off. An ephemeral node is deleted when the server is destroyed, so the next `up` has to reopen public SSH.
+   - Tags: off. The script does not pass a tag.
+   - Pre-approved: only listed if [device approval](https://login.tailscale.com/admin/settings/device-management) is on. If the checkbox is missing, leave device approval off. If it is there, tick Pre-approved.
+   - Do not enable Tailnet Lock. A locked tailnet will not accept this key.
+   - Expiry is 90 days at most. After that, a new join needs a new key in `pass`. A node that already joined keeps working until its own key expires.
+4. Paste only the key, one line, no quotes: `pass insert -m tailscale/authkey`
+5. Do not name another device `dev-ai`. `up` uses the first online peer with that hostname. The server is registered as `$NAME`.
+6. After the first successful join, [Machines](https://login.tailscale.com/admin/machines): row `dev-ai`, menu, **Disable key expiry**. Otherwise the node saved in the snapshot stops authenticating after 180 days.
+
+Leave the offline `dev-ai` node in Machines between `down` and `up`. Deleting it forces one public-SSH rejoin. The auth key is removed from the server disk after join. The node state in `/var/lib/tailscale` is what the snapshot reconnects with. The server does not use Tailscale DNS (`--accept-dns=false`).
+
+A snapshot from before Tailscale was installed has no node state. That `up` opens public SSH, joins, then closes it again.
+
+If other people are on the tailnet, the default policy lets them reach this server. The script does not install an ACL.
+
+### Firewall
+
+`up` creates a Hetzner firewall named `dev-ai-ts` once, from `firewall-tailscale.json`, and attaches it on every create. The only inbound rule is UDP 41641. The script does not overwrite rules you change later. Outbound stays open, which is how Tailscale connects from behind a deny-all inbound firewall.
+
+Locked out, and the tailnet path is dead: `hcloud firewall remove-from-resource --type server --server dev-ai dev-ai-ts`. Fix the key, SSH to the public IP, then attach the firewall again.
+
+### Connect
+
+Tailscale must be connected on the laptop. Same entry for a terminal (`ssh dev-ai`) and VS Code Remote SSH (Connect to Host, `dev-ai`). Delete any host that still points at the public IP.
 
 ```sshconfig
 Host dev-ai
@@ -82,9 +109,7 @@ Host dev-ai
   IdentitiesOnly yes
 ```
 
-The auth key must be reusable, and must not be ephemeral. Pre-approved is only shown if device approval is enabled; leave that off. An ephemeral node is deleted when the server is destroyed, so the next `up` has to reopen public SSH to join again. After a successful join the key is removed from the disk. The node state stays, and that is what the snapshot reconnects with. Leave the offline node in the admin console between `down` and `up`. Deleting it forces one public-SSH rejoin.
-
-A snapshot taken before Tailscale was installed has no node state. That `up` opens public SSH, joins, then attaches the firewall again.
+A clean boot has a new host key. If SSH says the key changed: `ssh-keygen -R dev-ai`.
 
 ## Config
 
